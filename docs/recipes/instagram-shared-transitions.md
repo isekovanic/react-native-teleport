@@ -6,7 +6,7 @@ We'll use iOS as our reference and replicate the transition across iOS, Android,
 
 <!-- -->
 
-[](/react-native-teleport/video/instagram.mov)
+[](/react-native-teleport/video/instagram.mp4)
 
 ## How it works — the big picture[​](#how-it-works--the-big-picture "Direct link to How it works — the big picture")
 
@@ -388,7 +388,7 @@ const Post = ({ post, active }) => {
 };
 ```
 
-[](/react-native-teleport/video/instagram-no-shared-transition.mov)
+[](/react-native-teleport/video/instagram-no-shared-transition.mp4)
 
 At this point you have a working app — tapping a video opens the `Reels` screen, and calling `navigation.goBack()` returns to `Feed`. But there are two problems:
 
@@ -867,37 +867,13 @@ export const FLOATING_ELEMENTS_DESTINATION = Platform.select({
 
 And now we can see how all pieces work together!
 
-[](/react-native-teleport/video/instagram.mov)
+[](/react-native-teleport/video/instagram.mp4)
 
 ## The complete transition flow[​](#the-complete-transition-flow "Direct link to The complete transition flow")
 
 Here's the full lifecycle when a user taps a video and then goes back:
 
-```
-1. User taps video in Feed
-   ├─ setId(post.id)          → marks which post to animate
-   ├─ measure()               → gets video's Y coordinate
-   ├─ navigate("Reels")       → opens Reels (no visible animation)
-   └─ goToReels(y)            → starts the transition:
-       ├─ destination = "overlay"  → video teleports to overlay
-       └─ progress: 0 → 1         → height grows, translateY moves up
-
-2. Spring animation completes
-   └─ destination = "reels"   → video teleports into Reels PortalHost
-
-3. User is now on full-screen Reels
-   └─ Can scroll to other reels normally
-
-4. User taps back button
-   └─ goToFeed(goBack):
-       ├─ destination = "overlay"  → video teleports back to overlay
-       └─ progress: 1 → 0         → height shrinks, translateY moves down
-
-5. Reverse animation completes
-   ├─ destination = undefined  → video returns to its feed position
-   ├─ y = 0                    → reset
-   └─ navigation.goBack()     → Reels screen closes
-```
+![Illustrated lifecycle of the Instagram shared transition: tap a feed video, move it through the overlay into Reels, then reverse the same path back to the feed.](/react-native-teleport/img/instagram-visualization.jpeg)
 
 ## Summary[​](#summary "Direct link to Summary")
 

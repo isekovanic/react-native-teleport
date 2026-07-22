@@ -33,6 +33,7 @@ Teleport views across your component tree for seamless transitions and powerful 
 
 #### guides
 
+- [Lifecycle & behavior](/docs/guides/lifecycle.md): How Portal and PortalHost behave together over time - what gets rendered where, and how children move when components mount and unmount.
 - [Portal](/docs/guides/portal.md): Portal helps you to render a component in a different place in the view hierarchy.
 - [Teleport](/docs/guides/teleport.md): Teleport helps you to re-use existing component and render it in a different part of tree without remounting and resetting the internal state.
 
@@ -53,6 +54,7 @@ Intro into portal and teleport concepts
 - [Building Instagram-like Transitions](/docs/recipes/instagram-shared-transitions.md): Build Instagram-like shared transitions between a feed and full-screen reels viewer using react-native-teleport.
 - [Jest testing guide](/docs/recipes/jest-testing-guide.md): A testing-guide showing how to write unit-tests using jest
 - [Working with Modals](/docs/recipes/modals.md): Learn how modals work on iOS/Android and how to use Portal within modal screens.
+- [Pre-loading Heavy Components](/docs/recipes/preloading-heavy-components.md): Pre-load expensive components (WebViews, maps, charts) offscreen and teleport them in instantly when the user navigates to them.
 
 
 ---
@@ -310,6 +312,116 @@ type usePortal = (hostName: string = "root") => {
 ## [📄️<!-- --> <!-- -->Jest testing guide](/react-native-teleport/docs/recipes/jest-testing-guide.md)
 
 [A testing-guide showing how to write unit-tests using jest](/react-native-teleport/docs/recipes/jest-testing-guide.md)
+
+
+---
+
+# Lifecycle & behavior
+
+This page describes the contract between [`Portal`](/react-native-teleport/docs/api/components/portal.md) and [`PortalHost`](/react-native-teleport/docs/api/components/portal-host.md) - what renders where, and how children move as components mount and unmount.
+
+The rules are designed to match what you'd intuitively expect from a portal system: children always end up *somewhere* visible, and they survive transient changes to the host.
+
+## 1. Static behavior[​](#1-static-behavior "Direct link to 1. Static behavior")
+
+Given a fixed configuration that doesn't change over time, this is where children render.
+
+| `Portal` configuration                                | Result                                                                                      |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| No `hostName` prop                                    | Children render **locally**, in place. `Portal` behaves like a transparent wrapper.         |
+| `hostName="x"` and a `<PortalHost name="x" />` exists | Children are **teleported** into that host.                                                 |
+| `hostName="x"` but no host with that name exists      | Children render **locally** as a fallback. As soon as a matching host mounts, they migrate. |
+
+The "render locally as fallback" rule means a `Portal` is never a black hole - children are always attached to a live view tree, even if the host is missing.
+
+Conditionally rendering when no host exists
+
+If you'd rather render *nothing* (or a different UI) while the host is missing instead of falling back locally, use the [`usePortal`](/react-native-teleport/docs/api/hooks/use-portal.md) hook and read its `isHostAvailable` flag:
+
+```
+import { Portal, usePortal } from "react-native-teleport";
+
+function Toast() {
+  const { isHostAvailable } = usePortal("toast");
+  if (!isHostAvailable) return null;
+
+  return (
+    <Portal hostName="toast">
+      <ToastContent />
+    </Portal>
+  );
+}
+```
+
+This way the `<ToastContent />` tree is only mounted while the host exists, instead of rendering at the local position and migrating later.
+
+## 2. Dynamic behavior[​](#2-dynamic-behavior "Direct link to 2. Dynamic behavior")
+
+The interesting cases happen when something changes. The library guarantees the following transitions:
+
+### A host mounts after the Portal[​](#a-host-mounts-after-the-portal "Direct link to A host mounts after the Portal")
+
+Children that were rendering locally as a fallback are moved into the new host automatically. The React tree doesn't re-render - only the native views are re-parented.
+
+### A host unmounts while the Portal is still alive[​](#a-host-unmounts-while-the-portal-is-still-alive "Direct link to A host unmounts while the Portal is still alive")
+
+Children are pulled back to the Portal's local position so they remain attached to a live view tree. They are *not* destroyed. Component state, refs, and any imperative native state (animation values, video playback position, scroll offset, etc.) are preserved.
+
+### A host remounts (mount → unmount → mount)[​](#a-host-remounts-mount--unmount--mount "Direct link to A host remounts (mount → unmount → mount)")
+
+On each cycle, children follow the host. Mounting a host with the same name a second time picks up exactly where the first cycle left off - there's no special "first mount" logic.
+
+### Portal's `hostName` prop changes[​](#portals-hostname-prop-changes "Direct link to portals-hostname-prop-changes")
+
+Children migrate from the previous target (host or local) to the new target. If the new `hostName` has no matching host, children fall back to local rendering until that host appears.
+
+### Portal unmounts[​](#portal-unmounts "Direct link to Portal unmounts")
+
+Its children unmount with it, regardless of where they currently live. The host doesn't keep orphaned children - `Portal` owns its children's React lifecycle, the host only owns their physical attachment point.
+
+### Host unmounts[​](#host-unmounts "Direct link to Host unmounts")
+
+Only the host disappears. All Portals targeting it survive, with their children intact (rendering locally per the rule above).
+
+## 3. Identity and ordering[​](#3-identity-and-ordering "Direct link to 3. Identity and ordering")
+
+These are the rules that are easy to get wrong if you don't know them.
+
+* **Multiple Portals targeting the same host** preserve order, with one important nuance:
+
+  <!-- -->
+
+  * **When teleported in the same commit** (e.g. both rendered at the same time on initial mount), their children appear in the host in the same order they sit in the JSX tree. If `<Portal A />` comes before `<Portal B />` in source, `A`'s children gets mounted earlier in the host than `B`'s.
+  * **When teleported in different commits** (e.g. `B` mounts later, after `A` is already in the host), order is defined by *arrival time*, not JSX position. The newcomer is appended after whatever is already in the host, even if it appears earlier in the source.
+
+* **Host names are matched as strings.** Two `PortalHost` instances with the same `name` mounted at the same time is undefined behavior - only the most recently registered one will receive new portals. Unmounting either may leave children stranded. Use unique names per active host.
+
+* **React identity is preserved across host mount/unmount cycles.** A teleported `<Video />` does not reset its playback position when its host unmounts and remounts. This is the whole reason you'd reach for a Portal that outlives its host.
+
+Layout is not preserved at the original location
+
+`Portal` does not reserve space at its position. Once children are teleported into a host, they take their size and position from the **host's** layout - the original location collapses to zero.
+
+If you need to avoid surrounding content reflowing while children are teleported away, render a wrapper view at the original position with the same dimensions as the teleported children:
+
+```
+<View style={{ width: 200, height: 60 }}>
+  <Portal hostName="overlay">
+    <View style={{ width: 200, height: 60 }}>
+      <ChildContent />
+    </View>
+  </Portal>
+</View>
+```
+
+The outer `<View>` keeps its slot in the layout regardless of whether the inner content is currently teleported.
+
+## See also[​](#see-also "Direct link to See also")
+
+* [Portal API](/react-native-teleport/docs/api/components/portal.md) - declarative component that teleports its children into a named host
+* [PortalHost API](/react-native-teleport/docs/api/components/portal-host.md) - the destination where teleported children are mounted
+* [usePortal hook](/react-native-teleport/docs/api/hooks/use-portal.md) - imperative access and `isHostAvailable` flag
+* [Teleport guide](/react-native-teleport/docs/guides/teleport.md) - for moving an *existing* view without unmounting it
 
 
 ---
@@ -666,7 +778,7 @@ We'll use iOS as our reference and replicate the transition across iOS, Android,
 
 <!-- -->
 
-[](/react-native-teleport/video/instagram.mov)
+[](/react-native-teleport/video/instagram.mp4)
 
 ## How it works — the big picture[​](#how-it-works--the-big-picture "Direct link to How it works — the big picture")
 
@@ -1048,7 +1160,7 @@ const Post = ({ post, active }) => {
 };
 ```
 
-[](/react-native-teleport/video/instagram-no-shared-transition.mov)
+[](/react-native-teleport/video/instagram-no-shared-transition.mp4)
 
 At this point you have a working app — tapping a video opens the `Reels` screen, and calling `navigation.goBack()` returns to `Feed`. But there are two problems:
 
@@ -1527,37 +1639,13 @@ export const FLOATING_ELEMENTS_DESTINATION = Platform.select({
 
 And now we can see how all pieces work together!
 
-[](/react-native-teleport/video/instagram.mov)
+[](/react-native-teleport/video/instagram.mp4)
 
 ## The complete transition flow[​](#the-complete-transition-flow "Direct link to The complete transition flow")
 
 Here's the full lifecycle when a user taps a video and then goes back:
 
-```
-1. User taps video in Feed
-   ├─ setId(post.id)          → marks which post to animate
-   ├─ measure()               → gets video's Y coordinate
-   ├─ navigate("Reels")       → opens Reels (no visible animation)
-   └─ goToReels(y)            → starts the transition:
-       ├─ destination = "overlay"  → video teleports to overlay
-       └─ progress: 0 → 1         → height grows, translateY moves up
-
-2. Spring animation completes
-   └─ destination = "reels"   → video teleports into Reels PortalHost
-
-3. User is now on full-screen Reels
-   └─ Can scroll to other reels normally
-
-4. User taps back button
-   └─ goToFeed(goBack):
-       ├─ destination = "overlay"  → video teleports back to overlay
-       └─ progress: 1 → 0         → height shrinks, translateY moves down
-
-5. Reverse animation completes
-   ├─ destination = undefined  → video returns to its feed position
-   ├─ y = 0                    → reset
-   └─ navigation.goBack()     → Reels screen closes
-```
+![Illustrated lifecycle of the Instagram shared transition: tap a feed video, move it through the overlay into Reels, then reverse the same path back to the feed.](/react-native-teleport/img/instagram-visualization.jpeg)
 
 ## Summary[​](#summary "Direct link to Summary")
 
@@ -1743,6 +1831,220 @@ function MyModal() {
 Remember
 
 The key insight is that **modals create separate native windows**. Your `PortalHost` must be in the same window hierarchy as the `Portal` that targets it.
+
+
+---
+
+# Pre-loading Heavy Components
+
+Some components are expensive to initialize. A WebView-based rich text editor, for example, must download JavaScript from a CDN, parse it, and run initialization logic before the user can interact with it. The same applies to maps, charts, and other third-party views rendered inside WebViews.
+
+The result is a loading spinner every time the user opens the screen - even though the component's content doesn't depend on anything screen-specific.
+
+<!-- -->
+
+|                                                                                                                    |                                                |
+| ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- |
+| [](/react-native-teleport/video/not-preloaded.mp4)                                                                 | [](/react-native-teleport/video/preloaded.mp4) |
+| *Not preloaded component - need to download JS from CDN, parse it, run initialization and do a layout in the end.* | *Preloaded component - instant rendering*      |
+
+With `react-native-teleport`, you can **render these components offscreen at app startup** and **teleport them on-screen when the user needs them**. Because the native view is **re-parented** (moved in the view hierarchy) rather than **re-mounted**, the component keeps its fully initialized state and appears instantly.
+
+## The pattern[​](#the-pattern "Direct link to The pattern")
+
+<!-- -->
+
+![](/react-native-teleport/img/preloading.svg)
+
+1. At app startup, mount the heavy component inside a `<Portal>` in a hidden offscreen container. Give the Portal a fixed `hostName`.
+2. The component loads and initializes in the background while the user is on other screens. Since no matching `<PortalHost>` exists yet, the Portal renders its children in place - offscreen.
+3. When the user navigates to the target screen, mount a `<PortalHost>` with the matching name.
+4. The component teleports in - fully loaded, zero wait. When the host unmounts, the content automatically returns to the offscreen Portal.
+
+## Example: WebView rich text editor[​](#example-webview-rich-text-editor "Direct link to Example: WebView rich text editor")
+
+We'll build a WebView-based editor using [Quill](https://quilljs.com) that pre-loads at startup and appears instantly when the user opens the editor screen.
+
+### Prerequisites[​](#prerequisites "Direct link to Prerequisites")
+
+* [`react-native-teleport`](/react-native-teleport/docs/installation.md)
+* [`react-native-webview`](https://github.com/nicolestandifer3/react-native-webview)
+
+### Step 1: Define the editor HTML[​](#step-1-define-the-editor-html "Direct link to Step 1: Define the editor HTML")
+
+Create an HTML string that loads Quill from a CDN and signals readiness via `postMessage`:
+
+editorHtml.ts
+
+```
+export const EDITOR_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <link href="https://cdn.quilljs.com/1.3.7/quill.snow.css" rel="stylesheet">
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    .ql-toolbar { border-left: none !important; border-right: none !important; border-top: none !important; }
+    .ql-container { border: none !important; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div id="editor">
+    <p>Start writing...</p>
+  </div>
+  <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+  <script>
+    var quill = new Quill('#editor', {
+      theme: 'snow',
+      modules: {
+        toolbar: [
+          [{ header: [1, 2, 3, false] }],
+          ['bold', 'italic', 'underline'],
+          [{ list: 'ordered' }, { list: 'bullet' }],
+          ['link', 'clean']
+        ]
+      }
+    });
+    // Signal that the editor is fully ready
+    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
+  </script>
+</body>
+</html>`;
+```
+
+### Step 2: Create the preloaded editor component[​](#step-2-create-the-preloaded-editor-component "Direct link to Step 2: Create the preloaded editor component")
+
+This component renders at the app root. It contains a `Portal` wrapping the WebView:
+
+PreloadedEditor.tsx
+
+```
+import { View, StyleSheet, Dimensions } from "react-native";
+import { Portal } from "react-native-teleport";
+import { WebView } from "react-native-webview";
+
+import { EDITOR_HTML } from "./editorHtml";
+
+const { width, height } = Dimensions.get("window");
+
+export default function PreloadedEditor() {
+  return (
+    <View style={styles.offscreen}>
+      <Portal hostName="editor" style={styles.portal}>
+        <WebView source={{ html: EDITOR_HTML }} style={styles.webview} />
+      </Portal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  offscreen: {
+    position: "absolute",
+    top: -9999,
+  },
+  portal: {
+    width: width,
+    height: height,
+  },
+  webview: {
+    flex: 1,
+  },
+});
+```
+
+**How it works:**
+
+* The Portal's `hostName` is set to `"editor"` from the start. As long as no `<PortalHost name="editor">` is mounted, the Portal renders its children in place - inside the offscreen container. The WebView loads and initializes invisibly.
+* When a `<PortalHost name="editor">` mounts on a screen, the Portal teleports the WebView to it. The native view is **moved, not recreated** - so the editor keeps its fully loaded state.
+* When the host unmounts (the user leaves the screen), the WebView teleports back to the offscreen Portal, preserving any content the user typed.
+
+### Step 3: Mount at the app root[​](#step-3-mount-at-the-app-root "Direct link to Step 3: Mount at the app root")
+
+Add `<PreloadedEditor />` inside your `PortalProvider` so it starts loading immediately:
+
+App.tsx
+
+```
+import { StyleSheet } from "react-native";
+import { PortalProvider } from "react-native-teleport";
+import PreloadedEditor from "./screens/RichTextEditor/PreloadedEditor";
+
+export default function App() {
+  return (
+    <PortalProvider>
+      <NavigationContainer>
+        <RootStack />
+      </NavigationContainer>
+      <PreloadedEditor />
+    </PortalProvider>
+  );
+}
+```
+
+### Step 4: Build the editor screen[​](#step-4-build-the-editor-screen "Direct link to Step 4: Build the editor screen")
+
+The screen provides a `<PortalHost>` as the teleport destination. No coordination is needed - simply mounting the host with the matching name pulls the preloaded WebView in:
+
+EditorScreen.tsx
+
+```
+import { View, StyleSheet } from "react-native";
+import { PortalHost } from "react-native-teleport";
+
+export default function EditorScreen() {
+  return (
+    <View style={styles.container}>
+      <PortalHost name="editor" style={styles.editor} />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  editor: { flex: 1 },
+});
+```
+
+That's it! When the user navigates to this screen, the editor appears instantly because it was already loaded offscreen. When the screen unmounts, the WebView teleports back to the offscreen Portal automatically.
+
+## Why this works[​](#why-this-works "Direct link to Why this works")
+
+Traditional approach:
+
+```
+Navigate → Mount WebView → Download JS → Parse → Initialize → Ready
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        User waits through all of this
+```
+
+With teleport pre-loading:
+
+```
+App startup → Mount WebView offscreen → Download JS → Parse → Initialize → Ready
+              (happens in background while user is on other screens)
+
+Navigate → Teleport WebView on-screen → Ready!
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+             Instant - no waiting
+```
+
+The key insight is that `react-native-teleport` **moves native views** rather than unmounting and remounting them. The WebView's internal state - loaded scripts, DOM, scroll position, user input - all survives the teleport.
+
+## When to use this pattern[​](#when-to-use-this-pattern "Direct link to When to use this pattern")
+
+This pattern is most valuable when:
+
+* **A component has expensive initialization** - WebView-based editors, maps, payment forms, or chart libraries that load JavaScript from CDNs.
+* **The initialization doesn't depend on screen-specific data** - the component can be pre-loaded with a generic configuration.
+* **The user will likely visit the screen** - pre-loading a component the user never sees wastes resources. Use this for screens that are part of the core flow.
+
+Content preservation
+
+Because the native view is **re-parented** rather than **re-mounted,** user input is preserved across teleports. If the user types something in the editor, navigates away, and comes back - their text is still there.
+
+## See it in action[​](#see-it-in-action "Direct link to See it in action")
+
+Check out the [Rich Text Editor example](https://github.com/kirillzyusko/react-native-teleport/tree/main/example/src/screens/RichTextEditor) in the example app, which includes a side-by-side comparison of the standard vs. pre-loaded approach.
 
 
 ---

@@ -33,6 +33,7 @@ Teleport views across your component tree for seamless transitions and powerful 
 
 #### guides
 
+- [Lifecycle & behavior](/docs/guides/lifecycle.md): How Portal and PortalHost behave together over time - what gets rendered where, and how children move when components mount and unmount.
 - [Portal](/docs/guides/portal.md): Portal helps you to render a component in a different place in the view hierarchy.
 - [Teleport](/docs/guides/teleport.md): Teleport helps you to re-use existing component and render it in a different part of tree without remounting and resetting the internal state.
 
@@ -53,3 +54,4 @@ Intro into portal and teleport concepts
 - [Building Instagram-like Transitions](/docs/recipes/instagram-shared-transitions.md): Build Instagram-like shared transitions between a feed and full-screen reels viewer using react-native-teleport.
 - [Jest testing guide](/docs/recipes/jest-testing-guide.md): A testing-guide showing how to write unit-tests using jest
 - [Working with Modals](/docs/recipes/modals.md): Learn how modals work on iOS/Android and how to use Portal within modal screens.
+- [Pre-loading Heavy Components](/docs/recipes/preloading-heavy-components.md): Pre-load expensive components (WebViews, maps, charts) offscreen and teleport them in instantly when the user navigates to them.
